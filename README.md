@@ -71,3 +71,4 @@ caveats (in particular the logical/dynamic-partition device naming under
 
 Apache License 2.0 — see `LICENSE`. Matches the licensing of the AOSP and TWRP source
 this tree builds against.
+
