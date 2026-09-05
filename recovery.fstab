@@ -1,0 +1,34 @@
+# recovery.fstab for motorola oulu
+#
+# Derived from fstab.emmc pulled from the vendor_boot recovery ramdisk of a
+# running device (see BoardConfig.mk header). Storage is UFS; the "emmc"
+# fs_mgr keyword below is the stock/legacy MTK naming, not literal hardware.
+#
+# TODO: the exact mapper device naming for dynamic (logical) partitions
+# (with vs without slot suffix) depends on this TWRP fork's fs_mgr behavior -
+# verify against a real build/boot before trusting the "logical" entries.
+#
+# <mount point>   <fstype>   <device>                              <flags>
+
+/system           ext4       /dev/block/mapper/system               flags=logical;slotselect;display="System";backup=1;wipeingui;removable
+/vendor           ext4       /dev/block/mapper/vendor               flags=logical;slotselect;display="Vendor";wipeingui;removable
+/product          ext4       /dev/block/mapper/product              flags=logical;slotselect;display="Product";wipeingui;removable
+/system_ext       ext4       /dev/block/mapper/system_ext           flags=logical;slotselect;display="System_ext";wipeingui;removable
+/vendor_dlkm      ext4       /dev/block/mapper/vendor_dlkm          flags=logical;slotselect;display="Vendor_dlkm";wipeingui;removable
+/system_dlkm      ext4       /dev/block/mapper/system_dlkm          flags=logical;slotselect;display="System_dlkm";wipeingui;removable
+
+/data             f2fs       /dev/block/by-name/userdata            flags=fileencryption=aes-256-xts:aes-256-cts:v2,metadata_encryption=aes-256-xts:wrappedkey_v0;display="Data";backup=1;wipeingui;removable;fileencryption
+/metadata         f2fs       /dev/block/by-name/metadata            flags=display="Metadata"
+
+/persist          ext4       /dev/block/by-name/persist             flags=display="Persist"
+
+/boot             emmc       /dev/block/by-name/boot                flags=slotselect;backup=1;flashimg=1
+/vendor_boot      emmc       /dev/block/by-name/vendor_boot         flags=slotselect;backup=1;flashimg=1
+/init_boot        emmc       /dev/block/by-name/init_boot           flags=slotselect;backup=1;flashimg=1
+/dtbo             emmc       /dev/block/by-name/dtbo                flags=slotselect;backup=1;flashimg=1
+/vbmeta           emmc       /dev/block/by-name/vbmeta              flags=slotselect;backup=1;flashimg=1
+/vbmeta_system    emmc       /dev/block/by-name/vbmeta_system       flags=slotselect;backup=1;flashimg=1
+/misc             emmc       /dev/block/by-name/misc                flags=display="Misc"
+
+/external_sd      auto       /devices/platform/soc/11240000.mmc*    flags=display="MicroSdCard";storage;wipeingui;removable
+/usb_otg          auto       /devices/platform/usb_xhci*            flags=display="USB OTG";storage;wipeingui;removable
