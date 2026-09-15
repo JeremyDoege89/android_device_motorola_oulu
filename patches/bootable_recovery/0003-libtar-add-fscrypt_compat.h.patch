@@ -1,0 +1,103 @@
+diff --git a/libtar/fscrypt_compat.h b/libtar/fscrypt_compat.h
+new file mode 100644
+index 0000000..fcce2d7
+--- /dev/null
++++ b/libtar/fscrypt_compat.h
+@@ -0,0 +1,97 @@
++/*
++ * fscrypt_compat.h - libtar to vold fscrypt policy API bridge
++ *
++ * libtar calls a version-agnostic fscrypt API: a "fscrypt_policy" type plus
++ * get_policy, get_policy_descriptor, get_policy_content, get_policy_size and
++ * fscrypt_policy_size accessors. system/vold on android-14.1 does not provide
++ * them; it exposes only the version-specific fscrypt_policy_v1 and
++ * fscrypt_policy_v2 structs, with lookup_ref_key, lookup_ref_tar and
++ * fscrypt_policy_get_struct defined over those.
++ *
++ * libtar's own Android.mk already selects the policy version at compile time
++ * (USE_FSCRYPT_POLICY_V1 or _V2) and puts system/vold on the include path, so
++ * "fscrypt_policy" can simply alias whichever struct was selected, with the
++ * accessors implemented on top of it.
++ *
++ * Without this, enabling TW_INCLUDE_CRYPTO_FBE fails to build: the accessors
++ * are called in libtar append.c, block.c, extract.c and output.c, and defined
++ * nowhere in the tree.
++ */
++
++#ifndef FSCRYPT_COMPAT_H
++#define FSCRYPT_COMPAT_H
++
++#include <stdint.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <string.h>
++#include <linux/fs.h>
++
++/* Pulls in the v1 and v2 structs, lookup_ref_key, lookup_ref_tar,
++ * fscrypt_policy_get_struct, bytes_to_hex and the FSCRYPT_POLICY defines.
++ * Resolves to system/vold/fscrypt_policy.h via LOCAL_C_INCLUDES.
++ */
++#include "fscrypt_policy.h"
++
++__BEGIN_DECLS
++
++#ifdef USE_FSCRYPT_POLICY_V1
++typedef struct fscrypt_policy_v1 fscrypt_policy;
++#define FSCRYPT_COMPAT_KEY_SIZE      FS_KEY_DESCRIPTOR_SIZE
++#define FSCRYPT_COMPAT_KEY_HEX_SIZE  FS_KEY_DESCRIPTOR_SIZE_HEX
++#else
++typedef struct fscrypt_policy_v2 fscrypt_policy;
++#define FSCRYPT_COMPAT_KEY_SIZE      FSCRYPT_KEY_IDENTIFIER_SIZE
++#define FSCRYPT_COMPAT_KEY_HEX_SIZE  FSCRYPT_KEY_IDENTIFIER_HEX_SIZE
++#endif
++
++/* The key reference: master_key_descriptor on v1, master_key_identifier on v2.
++ * Returned non-const because libtar writes the looked-up tar policy back into
++ * it - append.c and extract.c both memcpy into this.
++ */
++static inline uint8_t *get_policy_descriptor(fscrypt_policy *fep)
++{
++#ifdef USE_FSCRYPT_POLICY_V1
++	return (uint8_t *)fep->master_key_descriptor;
++#else
++	return (uint8_t *)fep->master_key_identifier;
++#endif
++}
++
++/* Raw policy struct, used as the destination when reading a policy back out of
++ * a tar extended header.
++ */
++static inline uint8_t *get_policy(fscrypt_policy *fep)
++{
++	return (uint8_t *)fep;
++}
++
++/* Size of the whole policy blob as stored in the tar header. */
++static inline uint8_t fscrypt_policy_size(const fscrypt_policy *fep)
++{
++	(void)fep;
++	return (uint8_t)sizeof(fscrypt_policy);
++}
++
++/* Size of the key reference: raw bytes, or the hex form including its NUL.
++ * libtar uses this to size stack buffers passed to bytes_to_hex.
++ */
++static inline uint8_t get_policy_size(const fscrypt_policy *fep, bool hex)
++{
++	(void)fep;
++	return hex ? (uint8_t)FSCRYPT_COMPAT_KEY_HEX_SIZE
++		   : (uint8_t)FSCRYPT_COMPAT_KEY_SIZE;
++}
++
++/* Human-readable summary for debug logging. Callers pass char[50]. */
++static inline void get_policy_content(fscrypt_policy *fep, char *content)
++{
++	char hex[FSCRYPT_COMPAT_KEY_HEX_SIZE];
++
++	bytes_to_hex(get_policy_descriptor(fep), FSCRYPT_COMPAT_KEY_SIZE, hex);
++	snprintf(content, 50, "v%u:%s", fep->version, hex);
++}
++
++__END_DECLS
++
++#endif /* FSCRYPT_COMPAT_H */

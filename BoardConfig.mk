@@ -115,6 +115,13 @@ BOARD_HAS_NO_REAL_SDCARD := true
 # TW_INCLUDE_CRYPTO := true
 # TW_INCLUDE_CRYPTO_FBE := true
 # TW_INCLUDE_FBE_METADATA_DECRYPT := true
+# /data uses fscrypt v2 with hardware-wrapped keys. The stock policy string,
+# read off the device from /vendor/etc/fstab.mt6878, is
+# aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized+wrappedkey_v0 and is carried
+# verbatim in recovery.fstab - a near-match fails fscrypt policy lookup.
+# 2 selects USE_FSCRYPT_POLICY_V2 in libtar/Android.mk (anything but 1 does).
+TW_USE_FSCRYPT_POLICY := 2
+TW_FORCE_KEYMASTER_VER := true
 TW_INCLUDE_LIBRESETPROP := true
 
 # Display - 1220x2712 @450dpi, backlight scale is 0-16181 (not the usual 0-255)
@@ -123,6 +130,24 @@ TW_BRIGHTNESS_PATH := /sys/class/leds/lcd-backlight/brightness
 TW_MAX_BRIGHTNESS := 16181
 TW_DEFAULT_BRIGHTNESS := 8000
 TW_NO_SCREEN_BLANK := true
+
+# MTP must stay off. TWRP enables MTP by setting sys.usb.config=mtp,adb, but
+# bootable/recovery/etc/init.rc only has configfs triggers for adb, fastboot,
+# sideload and none. The none trigger tears the gadget down (UDC "none", rm
+# configs/b.1/f1) and nothing matches mtp,adb to rebuild it, so USB dies the
+# moment TWRP starts - no adb, no fastboot, nothing enumerates.
+TW_EXCLUDE_MTP := true
+# Without this, minuitwrp's graphics_drm.cpp falls into its default branch, which
+# allocates a 16bpp RGB565 dumb buffer but renders into it via GGL_PIXEL_FORMAT_BGRA_8888
+# (32bpp) - painting the splash then runs off the end of the mapping and SIGSEGVs.
+TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"
+
+# Touchscreen. The panel is Goodix behind Motorola's mmi touch framework; none of
+# these ship in the vendor_boot ramdisk, so recovery has no touch until they are
+# loaded from vendor_dlkm (which TWRP mounts itself - see recovery.fstab).
+# sensors_class.ko and mtk_disp_notify.ko are already in vendor_boot's modules.load.
+# Order matters: mmi_relay -> mmi_info -> touchscreen_u_mmi -> goodix_*.
+TW_LOAD_VENDOR_MODULES := "mmi_relay.ko mmi_info.ko touchscreen_u_mmi.ko goodix_brl_u_mmi.ko goodix_gt96x_u_mmi.ko"
 
 # AVB
 BOARD_AVB_ENABLE := true
@@ -135,6 +160,14 @@ BOARD_SUPPRESS_SECURE_ERASE := true
 # Recovery / TWRP
 TARGET_RECOVERY_DEVICE_DIRS += $(DEVICE_PATH)
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery.fstab
+
+# SELinux. Stock policy confines the recovery domain far too tightly for TWRP:
+# it is denied write on rootfs (so it cannot create /etc/additional.fstab and then
+# aborts in fgets), property_service set for twrp.*, dm_device ioctl (logical
+# partitions) and system_dlkm getattr. Making the recovery domain permissive is
+# scoped to recovery only - normal Android loads its policy from the stock system
+# and vendor partitions, which this tree never builds or flashes.
+BOARD_SEPOLICY_DIRS += $(DEVICE_PATH)/sepolicy
 TW_EXTRA_LANGUAGES := true
 TW_INCLUDE_REPACKTOOLS := true
 TW_DEFAULT_LANGUAGE := en

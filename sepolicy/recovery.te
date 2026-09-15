@@ -1,0 +1,6 @@
+# TWRP runs as the recovery domain and needs far broader access than stock
+# recovery: rootfs writes, twrp.* properties, device-mapper ioctls for logical
+# partitions, and mounting vendor_dlkm to load touch modules. Enumerating every
+# allow rule would take many build/flash cycles and the recovery environment is
+# root-by-design anyway (reaching it already requires an unlocked bootloader).
+permissive recovery;

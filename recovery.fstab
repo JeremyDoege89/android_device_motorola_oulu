@@ -17,7 +17,7 @@
 /vendor_dlkm      ext4       /dev/block/mapper/vendor_dlkm          flags=logical;slotselect;display="Vendor_dlkm";wipeingui;removable
 /system_dlkm      ext4       /dev/block/mapper/system_dlkm          flags=logical;slotselect;display="System_dlkm";wipeingui;removable
 
-/data             f2fs       /dev/block/by-name/userdata            flags=fileencryption=aes-256-xts:aes-256-cts:v2,metadata_encryption=aes-256-xts:wrappedkey_v0;display="Data";backup=1;wipeingui;removable;fileencryption
+/data             f2fs       /dev/block/by-name/userdata            flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized+wrappedkey_v0,metadata_encryption=aes-256-xts:wrappedkey_v0;display="Data";backup=1;wipeingui;removable;fileencryption
 /metadata         f2fs       /dev/block/by-name/metadata            flags=display="Metadata"
 
 /persist          ext4       /dev/block/by-name/persist             flags=display="Persist"
@@ -30,5 +30,7 @@
 /vbmeta_system    emmc       /dev/block/by-name/vbmeta_system       flags=slotselect;backup=1;flashimg=1
 /misc             emmc       /dev/block/by-name/misc                flags=display="Misc"
 
-/external_sd      auto       /devices/platform/soc/11240000.mmc*    flags=display="MicroSdCard";storage;wipeingui;removable
-/usb_otg          auto       /devices/platform/usb_xhci*            flags=display="USB OTG";storage;wipeingui;removable
+# No microSD slot on this device - there is no mmc/msdc controller under
+# /sys/devices/platform at all, so an /external_sd entry only produces
+# "Error opening" spam at every partition refresh.
+/usb_otg          auto       /devices/platform/soc/11201000.usb0/11200000.xhci0*  flags=display="USB OTG";storage;wipeingui;removable

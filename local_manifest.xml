@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local manifest for Motorola Edge 2025 (oulu).
+
+  Copy to .repo/local_manifests/oulu.xml before `repo sync`:
+
+      mkdir -p .repo/local_manifests
+      cp device/motorola/oulu/local_manifest.xml .repo/local_manifests/oulu.xml
+
+  bootable/recovery and vendor/twrp are overridden with forks carrying fixes that
+  this device needs and that are not upstream yet. The same changes are mirrored as
+  plain patches under device/motorola/oulu/patches/ if you would rather apply them
+  to TeamWin's trees by hand - see the README.
+-->
+<manifest>
+
+  <remote name="oulu"
+          fetch="https://github.com/JeremyDoege89"
+          revision="android-14.1-oulu" />
+
+  <!-- TWRP recovery source.
+       Fixes: libtar calls a version-agnostic fscrypt policy API that android-14.1
+       system/vold does not export (compat bridge added), plus AOSP module renames
+       (*-ndk_platform -> *-ndk, keystore2 V1 -> V4). Without these the tree does
+       not build with FBE enabled. -->
+  <remove-project name="android_bootable_recovery" />
+  <project path="bootable/recovery"
+           name="android_bootable_recovery"
+           remote="oulu"
+           revision="android-14.1-oulu" />
+
+  <!-- TWRP build tasks.
+       Fix: build/tasks/kernel.mk calls the recipe macro twrp-depmod outside any
+       target, so make aborts with "commands commence before first target" whenever
+       TW_LOAD_VENDOR_MODULES is set and TARGET_PREBUILT_KERNEL is defined - which is
+       exactly this device's configuration (touch drivers load from vendor_dlkm). -->
+  <remove-project name="android_vendor_twrp" />
+  <project path="vendor/twrp"
+           name="android_vendor_twrp"
+           remote="oulu"
+           revision="android-14.1-oulu" />
+
+  <!-- The device tree itself. -->
+  <project path="device/motorola/oulu"
+           name="android_device_motorola_oulu"
+           remote="oulu"
+           revision="main" />
+
+</manifest>
