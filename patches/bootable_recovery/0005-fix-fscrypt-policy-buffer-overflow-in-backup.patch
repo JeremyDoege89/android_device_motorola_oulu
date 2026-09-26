@@ -1,0 +1,25 @@
+diff --git a/libtar/append.c b/libtar/append.c
+index 225ae1ad..3e435fbf 100755
+--- a/libtar/append.c
++++ b/libtar/append.c
+@@ -154,10 +154,17 @@ tar_append_file(TAR *t, const char *realname, const char *savename)
+ 			size = get_policy_size(t->th_buf.fep, false);
+ 			hex_size = get_policy_size(t->th_buf.fep, true);
+ 			descriptor = get_policy_descriptor(t->th_buf.fep);
++			// USER_CE_FSCRYPT_POLICY etc. (system/vold/fscrypt_policy.h) already embed
++			// the policy version as their first character ("2CE" on v2, "0CE" on
++			// v1) - prepending "%u" here re-adds that same digit, so on v2 this
++			// produced "22CE" (4 chars + NUL = 5 bytes) into a 4-byte buffer.
++			// FORTIFY_SOURCE catches the overflow and SIGABRTs the tar-fork process,
++			// which only a real Data backup of an FBE-decrypted /data ever reaches -
++			// "Backing up Data" -> "createTarFork() process ended with signal: 6".
+ 			char user_ce[4], user_de[4], system_de[4];
+-			sprintf(user_ce,"%u%s", t->th_buf.fep->version, USER_CE_FSCRYPT_POLICY);
+-			sprintf(user_de,"%u%s", t->th_buf.fep->version, USER_DE_FSCRYPT_POLICY);
+-			sprintf(system_de,"%u%s", t->th_buf.fep->version, SYSTEM_DE_FSCRYPT_POLICY);
++			snprintf(user_ce, sizeof(user_ce), "%s", USER_CE_FSCRYPT_POLICY);
++			snprintf(user_de, sizeof(user_de), "%s", USER_DE_FSCRYPT_POLICY);
++			snprintf(system_de, sizeof(system_de), "%s", SYSTEM_DE_FSCRYPT_POLICY);
+ #ifdef DEBUG
+ 			LOG("version: %u\n", t->th_buf.fep->version);
+ #endif

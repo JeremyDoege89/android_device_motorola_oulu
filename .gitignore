@@ -3,3 +3,6 @@
 .DS_Store
 # Built images are published under Releases, not committed
 *.img
+# editor/scratch backups
+*.bak*
+*bak

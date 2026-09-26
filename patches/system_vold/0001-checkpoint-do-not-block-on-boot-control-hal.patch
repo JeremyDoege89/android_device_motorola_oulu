@@ -1,0 +1,59 @@
+diff --git a/Checkpoint.cpp b/Checkpoint.cpp
+index 4c8209e..0360ba5 100644
+--- a/Checkpoint.cpp
++++ b/Checkpoint.cpp
+@@ -130,6 +130,18 @@ Status cp_supportsFileCheckpoint(bool& result) {
+     return Status::ok();
+ }
+ 
++// TWRP: the blocking BootControlClient service lookup never returns when
++// nothing serves android.hardware.boot.IBootControl/default, and nothing does
++// in recovery -
++// MTK's android.hardware.boot-service.mtk_recovery starts but never registers
++// the interface. MetadataCrypt.cpp passes cp_needsCheckpoint() straight into
++// fs_mgr_do_mount(), so this hung the /data mount indefinitely immediately
++// after metadata decryption had already succeeded. Every call site below
++// already handles a null module, so return null rather than wait forever.
++static std::unique_ptr<BootControlClient> GetBootControlOrNull() {
++    return nullptr;
++}
++
+ Status cp_startCheckpoint(int retry) {
+     bool result;
+     if (!cp_supportsCheckpoint(result).isOk() || !result)
+@@ -138,7 +150,7 @@ Status cp_startCheckpoint(int retry) {
+     if (retry < -1) return error(EINVAL, "Retry count must be more than -1");
+     std::string content = std::to_string(retry + 1);
+     if (retry == -1) {
+-        auto module = BootControlClient::WaitForService();
++        auto module = GetBootControlOrNull();
+         if (module) {
+             std::string suffix = module->GetSuffix(module->GetCurrentSlot());
+             if (!suffix.empty()) content += " " + suffix;
+@@ -172,7 +184,7 @@ Status cp_commitChanges() {
+             << "NOT COMMITTING CHECKPOINT BECAUSE persist.vold.dont_commit_checkpoint IS 1";
+         return Status::ok();
+     }
+-    auto module = BootControlClient::WaitForService();
++    auto module = GetBootControlOrNull();
+     if (module) {
+         auto cr = module->MarkBootSuccessful();
+         if (!cr.success)
+@@ -266,7 +278,7 @@ bool cp_needsRollback() {
+         if (content == "0") return true;
+         if (content.substr(0, 3) == "-1 ") {
+             std::string oldSuffix = content.substr(3);
+-            auto module = BootControlClient::WaitForService();
++            auto module = GetBootControlOrNull();
+             std::string newSuffix;
+ 
+             if (module) {
+@@ -287,7 +299,7 @@ bool cp_needsCheckpoint() {
+ 
+     bool ret;
+     std::string content;
+-    auto module = BootControlClient::WaitForService();
++    auto module = GetBootControlOrNull();
+ 
+     if (isCheckpointing) return isCheckpointing;
+     // In case of INVALID slot or other failures, we do not perform checkpoint.

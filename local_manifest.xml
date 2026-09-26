@@ -7,10 +7,10 @@
       mkdir -p .repo/local_manifests
       cp device/motorola/oulu/local_manifest.xml .repo/local_manifests/oulu.xml
 
-  bootable/recovery and vendor/twrp are overridden with forks carrying fixes that
-  this device needs and that are not upstream yet. The same changes are mirrored as
-  plain patches under device/motorola/oulu/patches/ if you would rather apply them
-  to TeamWin's trees by hand - see the README.
+  bootable/recovery, vendor/twrp and system/vold are overridden with forks carrying
+  fixes that this device needs and that are not upstream yet. The same changes are
+  mirrored as plain patches under device/motorola/oulu/patches/ if you would rather
+  apply them to TeamWin's trees by hand - see the README.
 -->
 <manifest>
 
@@ -37,6 +37,17 @@
   <remove-project name="android_vendor_twrp" />
   <project path="vendor/twrp"
            name="android_vendor_twrp"
+           remote="oulu"
+           revision="android-14.1-oulu" />
+
+  <!-- vold.
+       Fix: cp_needsCheckpoint() waits on BootControlClient for the boot control
+       HAL, which nothing serves in recovery, so fs_mgr_do_mount() never returns
+       and /data hangs immediately after metadata decryption has already
+       succeeded. Every call site already handles a null module. -->
+  <remove-project name="android_system_vold" />
+  <project path="system/vold"
+           name="android_system_vold"
            remote="oulu"
            revision="android-14.1-oulu" />
 

@@ -1,0 +1,211 @@
+diff --git a/Android.bp b/Android.bp
+index 200eb67..5f31246 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -176,6 +176,7 @@ cc_library_static {
+     shared_libs: [
+         "android.hardware.confirmationui@1.0",
+         "android.hardware.gatekeeper@1.0",
++        "android.hardware.gatekeeper-V1-ndk",
+         "android.hardware.health.storage@1.0",
+         "android.hardware.health.storage-V1-ndk",
+         "android.hardware.keymaster@4.1",
+diff --git a/Decrypt.cpp b/Decrypt.cpp
+index 0a5afb0..b37a357 100755
+--- a/Decrypt.cpp
++++ b/Decrypt.cpp
+@@ -57,6 +57,8 @@
+ #include <aidl/android/system/keystore2/IKeystoreService.h>
+ #include <aidl/android/system/keystore2/ResponseCode.h>
+ #include <android/hardware/gatekeeper/1.0/IGatekeeper.h>
++#include <aidl/android/hardware/gatekeeper/IGatekeeper.h>
++#include <aidl/android/hardware/gatekeeper/GatekeeperVerifyResponse.h>
+ 
+ #include <binder/IServiceManager.h>
+ #include <binder/IPCThreadState.h>
+@@ -88,6 +90,7 @@ extern "C" {
+ namespace apc = ::aidl::android::security::apc;
+ namespace keymint = ::aidl::android::hardware::security::keymint;
+ namespace ks2 = ::aidl::android::system::keystore2;
++namespace aidl_gk = ::aidl::android::hardware::gatekeeper;
+ 
+ using ::aidl::android::hardware::security::keymint::HardwareAuthenticatorType;
+ using ::aidl::android::hardware::security::keymint::HardwareAuthToken;
+@@ -790,8 +793,15 @@ bool Decrypt_User_Synth_Pass(const userid_t user_id, const std::string& Password
+ 		if (Password != "!") {
+ 			int ret = -1;
+ 			bool request_reenroll = false;
+-			android::sp<android::hardware::gatekeeper::V1_0::IGatekeeper> gk_device;
+-			gk_device = ::android::hardware::gatekeeper::V1_0::IGatekeeper::getService();
++			// This device's gatekeeper is AIDL only. The HIDL V1_0 service this used
++			// to ask for is never registered here (there is no hwservicemanager in
++			// the recovery ramdisk either), so getService() returned null and CE
++			// storage could never be unlocked - "failed to get gatekeeper service".
++			// The AIDL verify() hands back a HardwareAuthToken directly, so the
++			// hw_auth_token_t reinterpret/byte-swap the HIDL path needed is gone.
++			::ndk::SpAIBinder gkBinder(AServiceManager_getService(
++				"android.hardware.gatekeeper.IGatekeeper/default"));
++			auto gk_device = aidl_gk::IGatekeeper::fromBinder(gkBinder);
+ 			if (gk_device == nullptr) {
+ 				printf("failed to get gatekeeper service\n");
+ 				return Free_Return(retval, weaver_key, &pwd);
+@@ -800,62 +810,42 @@ bool Decrypt_User_Synth_Pass(const userid_t user_id, const std::string& Password
+ 				printf("no password handle supplied\n");
+ 				return Free_Return(retval, weaver_key, &pwd);
+ 			}
+-			android::hardware::hidl_vec<uint8_t> pwd_handle_hidl;
+-			pwd_handle_hidl.setToExternal(const_cast<uint8_t *>((const uint8_t *)pwd.password_handle), pwd.handle_len);
+ 			void* gk_pwd_token = PersonalizedHashBinary(PERSONALIZATION_USER_GK_AUTH, (char*)&password_token[0], PASSWORD_TOKEN_SIZE);
+ 			if (!gk_pwd_token) {
+ 				printf("malloc error getting gatekeeper_key\n");
+ 				return Free_Return(retval, weaver_key, &pwd);
+ 			}
+-			android::hardware::hidl_vec<uint8_t> gk_pwd_token_hidl;
+-			GKResponse gkResponse;
+-			gk_pwd_token_hidl.setToExternal(const_cast<uint8_t *>((const uint8_t *)gk_pwd_token), SHA512_DIGEST_LENGTH);
+-			android::hardware::Return<void> hwRet =
+-				gk_device->verify(fakeUid(user_id), 0 /* challenge */,
+-								  pwd_handle_hidl,
+-								  gk_pwd_token_hidl,
+-								  [&gkResponse]
+-									// []
+-									(const android::hardware::gatekeeper::V1_0::GatekeeperResponse &rsp) {
+-										// ret = static_cast<int>(rsp.code); // propagate errors
+-										if (rsp.code >= android::hardware::gatekeeper::V1_0::GatekeeperStatusCode::STATUS_OK) {
+-											printf("GateKeeper status ok\n");
+-											gkResponse = GKResponse::ok({rsp.data.begin(), rsp.data.end()});
+-											const hw_auth_token_t* hwAuthToken =
+-												reinterpret_cast<const hw_auth_token_t*>(gkResponse.payload().data());
+-											HardwareAuthToken authToken;
+-											authToken.timestamp.milliSeconds = betoh64(hwAuthToken->timestamp);
+-											authToken.challenge = hwAuthToken->challenge;
+-											authToken.userId = hwAuthToken->user_id;
+-											authToken.authenticatorId = hwAuthToken->authenticator_id;
+-											authToken.authenticatorType = static_cast<HardwareAuthenticatorType>(
+-													betoh32(hwAuthToken->authenticator_type));
+-											authToken.mac.assign(&hwAuthToken->hmac[0], &hwAuthToken->hmac[32]);
+-											AIBinder* authzAIBinder = AServiceManager_getService("android.security.authorization");
+-											::ndk::SpAIBinder binder(authzAIBinder);
+-											auto service = aidl::android::security::authorization::IKeystoreAuthorization::fromBinder(binder);
+-											if (service == NULL) {
+-												printf("error: could not connect to keystore service\n");
+-												ALOGE("error: could not connect to keystore service\n");
+-											}
+-											auto binder_result = service->addAuthToken(authToken);
+-										}
+-										else {
+-											if (rsp.code == android::hardware::gatekeeper::V1_0::GatekeeperStatusCode::ERROR_RETRY_TIMEOUT) {
+-												printf("GateKeeper response timeout\n");
+-												gkResponse = GKResponse::retry(rsp.timeout);
+-											} else {
+-												printf("GateKeeper response error\n");
+-												gkResponse = GKResponse::error();
+-											}
+-										}
+-									}
+-								 );
++			const uint8_t* handle_bytes = (const uint8_t*)pwd.password_handle;
++			std::vector<uint8_t> pwd_handle_vec(handle_bytes, handle_bytes + pwd.handle_len);
++			const uint8_t* token_bytes = (const uint8_t*)gk_pwd_token;
++			std::vector<uint8_t> gk_pwd_token_vec(token_bytes, token_bytes + SHA512_DIGEST_LENGTH);
+ 			free(gk_pwd_token);
+-			if (!hwRet.isOk()) {
++
++			aidl_gk::GatekeeperVerifyResponse gkRsp;
++			auto gkStatus = gk_device->verify(fakeUid(user_id), 0 /* challenge */,
++											  pwd_handle_vec, gk_pwd_token_vec, &gkRsp);
++			if (!gkStatus.isOk()) {
+ 				printf("gatekeeper verification failed\n");
+ 				return Free_Return(retval, weaver_key, &pwd);
+ 			}
++			if (gkRsp.statusCode >= aidl_gk::IGatekeeper::STATUS_OK) {
++				printf("GateKeeper status ok\n");
++				AIBinder* authzAIBinder = AServiceManager_getService("android.security.authorization");
++				::ndk::SpAIBinder binder(authzAIBinder);
++				auto service = aidl::android::security::authorization::IKeystoreAuthorization::fromBinder(binder);
++				if (service == NULL) {
++					printf("error: could not connect to keystore service\n");
++					ALOGE("error: could not connect to keystore service\n");
++				} else {
++					auto binder_result = service->addAuthToken(gkRsp.hardwareAuthToken);
++					if (!binder_result.isOk())
++						printf("addAuthToken failed\n");
++				}
++			} else if (gkRsp.statusCode == aidl_gk::IGatekeeper::ERROR_RETRY_TIMEOUT) {
++				printf("GateKeeper response timeout, retry in %d ms\n", gkRsp.timeoutMs);
++			} else {
++				printf("GateKeeper response error\n");
++			}
+ 		}
+ 	}
+ 	// Now we will handle https://android.googlesource.com/platform/frameworks/base/+/android-8.0.0_r23/services/core/java/com/android/server/locksettings/SyntheticPasswordManager.java#816
+@@ -970,39 +960,38 @@ extern "C" bool Decrypt_User(const userid_t user_id, const std::string& Password
+ 	}
+     bool should_reenroll;
+ 	bool request_reenroll = false;
+-	android::sp<android::hardware::gatekeeper::V1_0::IGatekeeper> gk_device;
+-	gk_device = ::android::hardware::gatekeeper::V1_0::IGatekeeper::getService();
+-	if (gk_device == nullptr)
++	// Legacy (non synthetic password) path, ported to AIDL for the same reason
++	// as above. auth_token/auth_token_len only ever fed the token_hex block
++	// below, whose result is never used, so the raw blob is not reconstructed
++	// from the returned HardwareAuthToken.
++	auth_token = nullptr;
++	auth_token_len = 0;
++	::ndk::SpAIBinder gkBinder(AServiceManager_getService(
++		"android.hardware.gatekeeper.IGatekeeper/default"));
++	auto gk_device = aidl_gk::IGatekeeper::fromBinder(gkBinder);
++	if (gk_device == nullptr) {
++		printf("failed to get gatekeeper service\n");
+ 		return false;
+-	android::hardware::hidl_vec<uint8_t> curPwdHandle;
+-	curPwdHandle.setToExternal(const_cast<uint8_t *>((const uint8_t *)handle.c_str()), st.st_size);
+-	android::hardware::hidl_vec<uint8_t> enteredPwd;
+-	enteredPwd.setToExternal(const_cast<uint8_t *>((const uint8_t *)Password.c_str()), Password.size());
+-
+-	android::hardware::Return<void> hwRet =
+-		gk_device->verify(user_id, 0 /* challange */,
+-						  curPwdHandle,
+-						  enteredPwd,
+-						  [&ret, &request_reenroll, &auth_token, &auth_token_len]
+-							(const android::hardware::gatekeeper::V1_0::GatekeeperResponse &rsp) {
+-								ret = static_cast<int>(rsp.code); // propagate errors
+-								if (rsp.code >= android::hardware::gatekeeper::V1_0::GatekeeperStatusCode::STATUS_OK) {
+-									printf("GateKeeper status ok\n");
+-									auth_token = new uint8_t[rsp.data.size()];
+-									auth_token_len = rsp.data.size();
+-									memcpy(auth_token, rsp.data.data(), auth_token_len);
+-									request_reenroll = (rsp.code == android::hardware::gatekeeper::V1_0::GatekeeperStatusCode::STATUS_REENROLL);
+-									ret = 0; // all success states are reported as 0
+-								} else if (rsp.code == android::hardware::gatekeeper::V1_0::GatekeeperStatusCode::ERROR_RETRY_TIMEOUT && rsp.timeout > 0) {
+-									printf("GateKeeper response timeout\n");
+-									ret = rsp.timeout;
+-								} else {
+-									printf("GateKeeper response error\n");
+-								}
+-							}
+-						 );
+-	if (!hwRet.isOk()) {
++	}
++	const uint8_t* cur_handle_bytes = (const uint8_t*)handle.c_str();
++	std::vector<uint8_t> curPwdHandle(cur_handle_bytes, cur_handle_bytes + st.st_size);
++	const uint8_t* entered_bytes = (const uint8_t*)Password.c_str();
++	std::vector<uint8_t> enteredPwd(entered_bytes, entered_bytes + Password.size());
++
++	aidl_gk::GatekeeperVerifyResponse gkRsp;
++	auto gkStatus = gk_device->verify(user_id, 0 /* challenge */,
++									  curPwdHandle, enteredPwd, &gkRsp);
++	if (!gkStatus.isOk())
+ 		return false;
++	if (gkRsp.statusCode >= aidl_gk::IGatekeeper::STATUS_OK) {
++		printf("GateKeeper status ok\n");
++		request_reenroll = (gkRsp.statusCode == aidl_gk::IGatekeeper::STATUS_REENROLL);
++		ret = 0; // all success states are reported as 0
++	} else if (gkRsp.statusCode == aidl_gk::IGatekeeper::ERROR_RETRY_TIMEOUT && gkRsp.timeoutMs > 0) {
++		printf("GateKeeper response timeout\n");
++		ret = gkRsp.timeoutMs;
++	} else {
++		printf("GateKeeper response error\n");
+ 	}
+ 
+ 	char token_hex[(auth_token_len*2)+1];

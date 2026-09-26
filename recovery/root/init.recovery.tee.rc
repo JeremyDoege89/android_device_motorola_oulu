@@ -1,0 +1,119 @@
+# Trustonic (Kinibi) TEE stack for oulu, needed to unwrap hardware-wrapped
+# FBE keys so /data can be decrypted. Transcribed from the stock vendor init
+# files (tee.rc, trustonic.rc and the two AIDL service rc files), with three
+# deliberate differences:
+#
+#   1. The binaries live under /system, not /vendor. TWRP mounts the real
+#      /vendor partition at runtime, which would shadow a ramdisk /vendor.
+#   2. The trustlet registry is NOT bundled - it is ~41MB against ~9MB of free
+#      space in the vendor_boot partition. It is read from /vendor/app/mcRegistry
+#      on the mounted vendor partition, exactly where stock reads it.
+#   3. Every service is 'disabled'. /vendor is a logical partition that TWRP
+#      maps well after init runs, so autostarting would race an unmounted
+#      /vendor. The chain is kicked off by:
+#
+#          setprop twrp.tee.start 1
+#
+#      which TWRP now does itself from TWPartitionManager::Decrypt_Data(),
+#      before the first decrypt attempt. Doing it on the FIRST attempt matters:
+#      a failed attempt leaves a half-built "userdata" dm-default-key device
+#      behind, and create_crypto_blk_dev() then fails every retry with
+#      DM_DEV_CREATE ... Device or resource busy (vold only reuses an existing
+#      device if it is SUSPENDED).
+#
+#      tee_mount_persist mounts /vendor itself, so the registry in
+#      /vendor/app/mcRegistry is there before mcDriverDaemon starts. Without it
+#      the daemon comes up with zero trustlets and every KeyMint call fails with
+#      SECURE_HW_COMMUNICATION_FAILED (-49).
+#
+#      It also opens the TEE device nodes: libMcClient opens /dev/mobicore-user,
+#      the node is 0600 root:root, and the KeyMint HAL runs as user system, so
+#      without this the HAL gets "Permission denied in open" from
+#      ClientLib/src/driver.cpp and HAL_Configure() never completes. TWRP ships
+#      no ueventd rule for these nodes.
+#
+#      mobicore sets ro.vendor.trustonic.ready=true when mcOpenSession works,
+#      which then starts keymint and gatekeeper - same gate stock uses.
+
+on init
+    mkdir /mnt/vendor 0771 system system
+    mkdir /mnt/vendor/persist 0771 system system
+
+# persist is not slot-suffixed on this device.
+service tee_mount_persist /system/bin/sh -c "mkdir -p /vendor; mount -o ro /dev/block/mapper/vendor${ro.boot.slot_suffix} /vendor || mount -o ro /dev/block/mapper/vendor /vendor; chmod 0666 /dev/mobicore /dev/mobicore-user /dev/teeperf; chown system:system /dev/mobicore-user; mount -t ext4 -o rw /dev/block/by-name/persist /mnt/vendor/persist; mkdir -p /mnt/vendor/persist/mcRegistry /mnt/vendor/persist/keybox /mnt/vendor/persist/rpmb /mnt/vendor/persist/mobicore; chown -R system:system /mnt/vendor/persist; mkdir -p /mnt/vendor/tzapp; mount -t ext4 -o rw /dev/block/by-name/tzapp${ro.boot.slot_suffix} /mnt/vendor/tzapp; mkdir -p /mnt/vendor/tzapp/TbStorage; chown system:system /mnt/vendor/tzapp/TbStorage; chmod 0771 /mnt/vendor/tzapp/TbStorage; setprop twrp.tee.persist.mounted 1"
+    user root
+    group root system
+    disabled
+    oneshot
+    seclabel u:r:recovery:s0
+
+on property:twrp.tee.start=1
+    start tee_mount_persist
+
+# Chained on the property rather than "wait_for_prop twrp.tee.persist.mounted 1"
+# in the block above: wait_for_prop blocks init's main loop and has no timeout.
+# With both actions on the same twrp.tee.start trigger, init ran the wait first
+# and deadlocked - the service that sets the property is started by this block,
+# which could never run. Event chaining also degrades gracefully: if the persist
+# mount fails, the TEE simply stays down instead of hanging the device.
+on property:twrp.tee.persist.mounted=1
+    start mobicore
+
+service mobicore /system/bin/mcDriverDaemon --P1 /mnt/vendor/persist/mcRegistry \
+    -r /vendor/app/mcRegistry/06090000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/020f0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/05120000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/05120000000000000000000000000001.drbin \
+    -r /vendor/app/mcRegistry/05160000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/020b0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/05070000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/030b0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/03100000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/030c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/031c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/032c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/033c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/034c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/035c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/036c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/037c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/40188311faf343488db888ad39496f9a.drbin \
+    -r /vendor/app/mcRegistry/070c0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/090b0000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/0f5eed3c3b5a47afacca69a84bf0efad.drbin \
+    -r /vendor/app/mcRegistry/07060000000000000000000000007169.drbin \
+    -r /vendor/app/mcRegistry/4be4f7dc1f2c11e5b5f7727283247c7f.drbin \
+    -r /vendor/app/mcRegistry/08070000000000000000000000008270.drbin \
+    -r /vendor/app/mcRegistry/07070000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/07407000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/9073f03a9618383bb1856eb3f990babd.drbin \
+    -r /vendor/app/mcRegistry/6b3f5fa0f8cf55a7be2582587d62d63a.drbin \
+    -r /vendor/app/mcRegistry/5020170115e016302017012521300000.drbin \
+    -r /vendor/app/mcRegistry/07210000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/04020000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/03030000000000000000000000000000.drbin \
+    -r /vendor/app/mcRegistry/09180000000000000000000000000000.drbin
+    user root
+    group root system
+    class main
+    disabled
+    seclabel u:r:recovery:s0
+
+service vendor.keymint-trustonic /system/bin/android.hardware.security.keymint@3.0-service.trustonic
+    class early_hal
+    user system
+    group system
+    disabled
+    seclabel u:r:recovery:s0
+
+service vendor.gatekeeper-default /system/bin/android.hardware.gatekeeper-service.trustonic
+    class early_hal
+    user system
+    disabled
+    seclabel u:r:recovery:s0
+
+# Stock gates the HALs on this property, set by the Trustonic daemon once
+# mcOpenSession is available and DrAndroid is loaded.
+on property:ro.vendor.trustonic.ready=true
+    start vendor.keymint-trustonic
+    start vendor.gatekeeper-default

@@ -1,4 +1,5 @@
 import /init.recovery.project.rc
+import /init.recovery.tee.rc
 
 # servicemanager's ELF interpreter is /system/bin/bootstrap/linker64, which the
 # recovery ramdisk does not ship; without it exec fails with ENOENT and binder

@@ -1,0 +1,24 @@
+diff --git a/Android.mk b/Android.mk
+index 3a4c2d9..13d2a87 100755
+--- a/Android.mk
++++ b/Android.mk
+@@ -343,6 +343,7 @@ ifeq ($(TW_INCLUDE_CRYPTO), true)
+         android.frameworks.stats@1.0 \
+         android.security.maintenance-ndk \
+         android.system.keystore2-V4-ndk \
++        android.hardware.gatekeeper-V1-ndk \
+         libkeyutils \
+         libsysutils \
+         liblog \
+diff --git a/libtar/Android.mk b/libtar/Android.mk
+index 8873024..02b814c 100755
+--- a/libtar/Android.mk
++++ b/libtar/Android.mk
+@@ -19,6 +19,7 @@ ifeq ($(TW_INCLUDE_CRYPTO_FBE), true)
+         android.hardware.boot@1.0 \
+         android.hardware.confirmationui@1.0 \
+         android.hardware.gatekeeper@1.0 \
++        android.hardware.gatekeeper-V1-ndk \
+         android.hardware.keymaster@3.0 \
+         android.hardware.keymaster@4.0 \
+         android.hardware.keymaster@4.1 \

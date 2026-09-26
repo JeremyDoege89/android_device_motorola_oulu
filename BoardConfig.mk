@@ -112,9 +112,15 @@ BOARD_HAS_NO_REAL_SDCARD := true
 # provide them either. Verified bootable/recovery is at the exact tip of
 # android-14.1 (426b747), so this is an upstream inconsistency, not a sync problem.
 # Re-enable these once those helpers exist; without them TWRP cannot decrypt /data.
-# TW_INCLUDE_CRYPTO := true
-# TW_INCLUDE_CRYPTO_FBE := true
-# TW_INCLUDE_FBE_METADATA_DECRYPT := true
+# The Trustonic binaries and libraries are prebuilt ELF files shipped via
+# PRODUCT_COPY_FILES, which AOSP normally rejects (it wants prebuilt modules).
+# They are vendor blobs pulled off the device, not built here, so take the
+# documented escape hatch rather than wrapping 9 blobs in build modules.
+BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
+
+TW_INCLUDE_CRYPTO := true
+TW_INCLUDE_CRYPTO_FBE := true
+TW_INCLUDE_FBE_METADATA_DECRYPT := true
 # /data uses fscrypt v2 with hardware-wrapped keys. The stock policy string,
 # read off the device from /vendor/etc/fstab.mt6878, is
 # aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized+wrappedkey_v0 and is carried
@@ -176,3 +182,61 @@ RECOVERY_VARIANT := twrp
 # Root: stock init_boot ramdisk on this device is already KernelSU-patched
 # (init.real backup + kernelsu.ko present) - informational only, does not
 # affect the TWRP build.
+
+# servicemanager, keystore2 and the other bootstrap binaries have
+# /system/bin/bootstrap/linker64 as their ELF interpreter. If it is missing,
+# execv fails with ENOENT (reported against the binary, not the interpreter),
+# binder never comes up and the recovery service crash-loops.
+#
+# v3-v5 created this at runtime from init.recovery.mt6878.rc's "on early-init".
+# In v6 that stopped taking effect and TWRP crash-looped, so do not depend on a
+# trigger firing: bake the symlink into the ramdisk at build time.
+# The security patch level the TEE expects. The Trustonic KeyMint HAL reads
+# exactly two properties - ro.build.version.security_patch and
+# ro.vendor.build.security_patch - and binds keys to them. The recovery
+# ramdisk's prop.default carries the AOSP defaults for this branch
+# (2024-09-05, and an EMPTY vendor value), which do not match the firmware on
+# the device. The mismatch makes HAL_Configure() fail with
+# "TlcKM: Failed to read version info.", after which every KeyMint call returns
+# Invalid session handle and keystore2 reports -49
+# SECURE_HW_COMMUNICATION_FAILED - so /data cannot be decrypted at all.
+#
+# Must match the running firmware: read it off the device with
+#     getprop ro.vendor.build.security_patch      (or /vendor/build.prop)
+# UPDATE THIS AFTER EVERY OTA, or decryption will stop working.
+# android.hardware.gatekeeper-V1-ndk has no recovery variant in Soong, so it is
+# built and installed only to system/lib64 and never reaches the ramdisk. Both the
+# recovery binary (which links it via TW_INCLUDE_CRYPTO) and the Trustonic
+# gatekeeper HAL need it at runtime: without it the HAL dies with
+# "CANNOT LINK EXECUTABLE ... library android.hardware.gatekeeper-V1-ndk.so not
+# found" and exits status 1 forever, so CE storage can never be unlocked.
+# Do NOT take this .so from the device's system partition - that one is built
+# against keymint-V4 while this branch ships keymint-V3, and it drags the wrong
+# ABI in behind it. The copy below is the one this tree built.
+
+# libtar.so is also never refreshed in the ramdisk: a rebuilt copy lands in
+# system/lib64 and the intermediates, but recovery/root/system/lib64 silently keeps
+# whatever the first build put there. Every libtar fix was therefore absent from
+# the flashed image - found when a fixed Data-backup crash reproduced byte-for-byte
+# and the packed libtar.so turned out to be months old. Copy it in explicitly.
+# If you change anything under bootable/recovery/libtar, verify the ramdisk copy's
+# sha256 matches obj/SHARED_LIBRARIES/libtar_intermediates/libtar.so.
+
+OULU_SECURITY_PATCH := 2026-07-01
+
+# BOARD_RECOVERY_IMAGE_PREPARE is an otherwise-unused hook, expanded as the last
+# shell command of the recovery ramdisk staging rule in build/make/core/Makefile,
+# immediately before mkbootfs packs the ramdisk.
+#
+# Must be "=" and not ":=" - TARGET_RECOVERY_ROOT_OUT is not defined yet when
+# BoardConfig.mk is read, so the expansion has to be deferred to recipe time.
+# With ":=" it would expand to empty and the mkdir would target the build host.
+BOARD_RECOVERY_IMAGE_PREPARE = \
+    mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/system/bin/bootstrap && \
+    ln -sf /system/bin/linker64 $(TARGET_RECOVERY_ROOT_OUT)/system/bin/bootstrap/linker64 && \
+    printf '<manifest version="1.0" type="framework"/>\n' > $(TARGET_RECOVERY_ROOT_OUT)/system/etc/vintf/manifest/android.hardware.boot-service.mtk.xml && \
+    printf '<manifest version="1.0" type="framework"/>\n' > $(TARGET_RECOVERY_ROOT_OUT)/system/etc/vintf/manifest/android.hardware.health-service.example.xml && \
+    sed -i 's|^ro\.build\.version\.security_patch=.*|ro.build.version.security_patch=$(OULU_SECURITY_PATCH)|' $(TARGET_RECOVERY_ROOT_OUT)/prop.default && \
+    sed -i 's|^ro\.vendor\.build\.security_patch=.*|ro.vendor.build.security_patch=$(OULU_SECURITY_PATCH)|' $(TARGET_RECOVERY_ROOT_OUT)/prop.default && \
+    cp -f $(TARGET_OUT_INTERMEDIATES)/SHARED_LIBRARIES/android.hardware.gatekeeper-V1-ndk_intermediates/android.hardware.gatekeeper-V1-ndk.so $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/android.hardware.gatekeeper-V1-ndk.so && \
+    cp -f $(TARGET_OUT_INTERMEDIATES)/SHARED_LIBRARIES/libtar_intermediates/libtar.so $(TARGET_RECOVERY_ROOT_OUT)/system/lib64/libtar.so
