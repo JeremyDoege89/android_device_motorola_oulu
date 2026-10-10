@@ -1,0 +1,19 @@
+diff --git a/core/Makefile b/core/Makefile
+index 832a155..a636475 100644
+--- a/core/Makefile
++++ b/core/Makefile
+@@ -2737,7 +2737,13 @@ $(INTERNAL_RECOVERY_RAMDISK_FILES_TIMESTAMP): $(MKBOOTFS) \
+ 	mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/sdcard $(TARGET_RECOVERY_ROOT_OUT)/tmp
+ 	# Copying baseline ramdisk...
+ 	# Use rsync because "cp -Rf" fails to overwrite broken symlinks on Mac.
+-	rsync -a --exclude=sdcard $(IGNORE_RECOVERY_SEPOLICY) $(IGNORE_CACHE_LINK) $(TARGET_ROOT_OUT) $(TARGET_RECOVERY_OUT)
++	# --exclude=/root/vendor: the generic ramdisk has /vendor as a symlink to /system/vendor,
++	# but recovery-variant modules (vendor vintf manifests, vendor selinux contexts) and TWRP's
++	# own relink.sh install into $(TARGET_RECOVERY_ROOT_OUT)/vendor as a REAL directory, and
++	# those installs are prerequisites of this rule. rsync cannot replace a non-empty directory
++	# with a symlink ("could not make way for new symlink: root/vendor"), and doing so would
++	# discard the recovery vendor files. Keep the real directory.
++	rsync -a --exclude=sdcard --exclude=/root/vendor $(IGNORE_RECOVERY_SEPOLICY) $(IGNORE_CACHE_LINK) $(TARGET_ROOT_OUT) $(TARGET_RECOVERY_OUT)
+ 	# Modifying ramdisk contents...
+ 	ln -sf /system/bin/init $(TARGET_RECOVERY_ROOT_OUT)/init
+ 	# Removes $(TARGET_RECOVERY_ROOT_OUT)/init*.rc EXCEPT init.recovery*.rc.

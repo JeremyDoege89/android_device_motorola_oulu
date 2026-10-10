@@ -196,6 +196,44 @@ a string or trusting a clean build log.**
 **Confirmed fixed on hardware:** a full 58 GB Data backup (35 tar archives) completed in
 741 seconds with zero crash.
 
+#### Other fixes the decrypt path depends on
+
+These are in the tree too, and each one was a hard blocker at some point.
+
+- **The boot-recovery loop.** Once anything wrote `boot-recovery` into the BCB in `misc`
+  (`fastboot reboot recovery` does), *every* boot landed in TWRP, cold boots included.
+  TWRP never cleared it: `recovery_main.cpp` and `recovery.cpp`, the AOSP code that would,
+  are not compiled into this branch at all. `twrp.cpp` now writes an empty bootloader
+  message to `/misc` right after partitions are set up (the 2048-byte struct at offset 0
+  only, leaving A/B `bootloader_control` at offset 2048 intact).
+- **vold's errors were being discarded.** Recovery has no `logd`, so every `LOG(ERROR)`
+  inside vold vanished and only TWRP's generic `Unable to decrypt metadata encryption`
+  showed. `twrp.cpp` now calls `__android_log_set_logger(__android_log_stderr_logger)`
+  after it redirects stdout/stderr, so vold, libfstab and libbase errors land in
+  `/tmp/recovery.log`. Every fix after that was found through it.
+- **Trustonic secure storage (RPMB) would not mount** (`[STH2] Failed to mount partition 0`,
+  `rpmb_gp_open_session, mc_open_session failed, result(16)`), so KeyMint could not unwrap
+  the metadata key. The fix was creating the directories stock Android creates:
+  `/mnt/vendor/persist/rpmb`, `/mnt/vendor/persist/mobicore`, and `TbStorage` (0771
+  system:system) on the `tzapp` partition mounted read-write. `tee_mount_persist` in
+  `init.recovery.tee.rc` does this; afterwards the log shows
+  `Partition 1 successfully mounted`. Note it writes one directory to `tzapp`, so back
+  that partition up before the first boot.
+- **`mobicore` runs as root without `priority -20`.** Recovery's context refuses init's
+  `setpriority`, so the stock `user system` + `priority -20` service died with status 6
+  every time.
+- **VINTF.** libvintf only merges fragments into a base manifest, and with none it ignores
+  them all, so `device.mk` ships a minimal framework `manifest.xml`. Two `type="device"`
+  fragments (`android.hardware.boot-service.mtk.xml`,
+  `android.hardware.health-service.example.xml`) sit in the framework directory and abort
+  the merge. They ship in the *stock platform* ramdisk fragment, so deleting them from the
+  recovery fragment does nothing; because the recovery fragment overlays last,
+  `BOARD_RECOVERY_IMAGE_PREPARE` writes empty framework-type stubs at the same paths.
+  This took keystore2 from a crash loop to running.
+- **`BOARD_RECOVERY_IMAGE_PREPARE` must be assigned with `=`, never `:=`.** It refers to
+  `TARGET_RECOVERY_ROOT_OUT`, which is not defined yet when BoardConfig is read; `:=`
+  expands it to empty and the commands would act on the build host's own `/system`.
+
 ## Getting a tree that builds
 
 TeamWin's `bootable/recovery`, `vendor/twrp` and `system/vold` all need fixes this device
@@ -241,13 +279,27 @@ cd system/vold      && git apply /path/to/device/motorola/oulu/patches/system_vo
   `Decrypt.cpp` (plus the `android.hardware.gatekeeper-V1-ndk` dependency in
   `Android.bp` — the matching `bootable_recovery/` half is `0004` above).
 
+**Both options: also patch `build/make`.** One fix lives in AOSP's build system, which no
+fork above covers, so apply it by hand either way:
+
+```
+cd build/make && git apply /path/to/device/motorola/oulu/patches/build_make/*.patch
+```
+
+- `build_make/0001` — adds `--exclude=/root/vendor` to the recovery-ramdisk `rsync` in
+  `core/Makefile`. The generic ramdisk has `/vendor` as a symlink, but recovery-variant
+  vendor files and TWRP's `relink.sh` install `recovery/root/vendor` as a real directory,
+  and rsync cannot replace that with a symlink: the build fails with
+  `could not make way for new symlink: root/vendor`. A `repo sync` reverts this edit, so
+  re-apply it after every sync.
+
 ## Building
 
 ```
 repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-14.1 --depth=1 --no-tags --git-lfs
 repo sync -c --no-tags
 git clone https://github.com/JeremyDoege89/android_device_motorola_oulu device/motorola/oulu
-# then apply patches/ as above
+# then apply patches/ as above (always including patches/build_make/)
 
 source build/envsetup.sh
 lunch twrp_oulu-ap2a-eng
